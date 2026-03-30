@@ -1,11 +1,24 @@
-**Treinamento Intensivo para Desenvolvedores: Migração Sensedia para Kong Enterprise**
+<style>
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333333; line-height: 1.6; margin: 10px; }
+  h1 { font-size: 24px; text-align: center; color: #003380; margin-bottom: 5px; }
+  h2.subtitle { font-size: 16px; text-align: center; color: #666666; font-weight: normal; margin-top: 0px; margin-bottom: 30px; }
+  h3 { color: #003380; border-bottom: 1px solid #DDDDDD; padding-bottom: 5px; margin-top: 25px; }
+  h4 { color: #222222; font-size: 15px; margin-top: 20px; margin-bottom: 10px; font-weight: bold; }
+  p, li { font-size: 14px; }
+  ul { margin-top: 5px; margin-bottom: 15px; }
+  li { margin-bottom: 8px; }
+  strong { color: #000000; }
+  .info-block { display: inline-block; width: 100%; border-radius: 4px; padding: 15px; margin-bottom: 10px; background-color: #F8F9FA;}
+</style>
 
-**Duração Total:** 8 horas (pode ser dividido em 2 sessões de 4 horas ou 1 diária completa).
-**Público-alvo:** Desenvolvedores backend, integradores e desenvolvedores de APIs.
-**Objetivo:** Introduzir a plataforma Kong Konnect, montar um ambiente de trabalho funcional e resolver de forma nativa todos os desafios técnicos mapeados na migração da Sensedia (gestão de tokens, controle de acesso, segurança WAF e substituição de scripts Lua).
+# Treinamento Intensivo para Desenvolvedores
+<h2 class="subtitle">Migração Sensedia para Kong Enterprise</h2>
 
----
-
+<div class="info-block">
+<strong>Duração Total:</strong> 8 horas (pode ser dividido em 2 sessões de 4 horas ou 1 diária completa).<br>
+<strong>Público-alvo:</strong> Desenvolvedores backend, integradores e desenvolvedores de APIs.<br>
+<strong>Objetivo:</strong> Introduzir a plataforma Kong Konnect, montar um ambiente de trabalho funcional e resolver de forma nativa todos os desafios técnicos mapeados na migração da Sensedia (gestão de tokens, controle de acesso, segurança WAF e substituição de scripts Lua).
+</div>
 
 ### **Agenda do Treinamento (8 Horas)**
 

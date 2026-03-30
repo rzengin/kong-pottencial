@@ -6,14 +6,6 @@
 
 ---
 
-### **Pré-requisitos**
-Para a execução prática, cada desenvolvedor deverá contar com:
-*   **Git** instalado para clonar o repositório base.
-*   **Docker Desktop** (ou Docker Engine + Compose v2) rodando localmente para provisionar os simuladores (mocks), o Gateway e a interface visual do Jaeger.
-*   **CLI do Kong (decK)** instalada para aplicar configurações de forma puramente declarativa.
-*   **Acesso à Internet** liberado para comunicação segura (Outbound TLS) pela porta 443 com o Control Plane do Kong Konnect (SaaS).
-
----
 
 ### **Agenda do Treinamento (8 Horas)**
 

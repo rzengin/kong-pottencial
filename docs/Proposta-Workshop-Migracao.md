@@ -8,7 +8,17 @@ Agradecemos o envio detalhado do mapeamento arquitetural atual de vocês. Com ba
 
 O objetivo desta sessão é construir, junto com vocês, o ambiente e demonstrar na prática como o **Kong Konnect Enterprise** resolve nativamente (de forma totalmente declarativa, sem a necessidade de custom scripts) todos os pontos levantados no documento original.
 
-Abaixo está o roteiro e a metodologia do nosso Workshop planejado.
+Abaixo está o roteiro, a metodologia e os requisitos do nosso Workshop planejado.
+
+---
+
+## Pré-requisitos Técnicos
+Para garantir um fluxo contínuo durante a sessão técnica, solicitamos que cada engenheiro participante tenha em sua máquina local:
+
+* **Git** instalado para clonar o repositório do curso.
+* **Docker Desktop** (ou Docker Engine + Docker Compose v2) rodando localmente para provisionar os mocks, o Gateway e a interface visual do Jaeger.
+* **CLI do Kong (decK)** instalada para aplicar as configurações de forma puramente declarativa.
+* **Acesso à Internet** liberado para comunicação segura (`Outbound TLS`) com o Control Plane do Kong Konnect (SaaS) na porta `443`.
 
 ---
 
@@ -53,6 +63,19 @@ Notamos que, visando preencher lacunas, a equipe de vocês desenvolveu 3 plugins
 ### Bloco C: Adoção de Motor Avançado (Aproveitando as Boas Práticas)
 * **Comentário Positivo mapeado (Motor ATC):**
   * 🎯 **Cenário 03 e 04: Roteamento Avançado e Reescrita (Expressions).** Confirmaremos a excelente decisão técnica de vocês com *Expressions* usando `product_keys` via regex robustos de borda em nossa estrutura final de sincronia pelo sistema *decK*.
+
+---
+
+## Agenda Sugerida (Duração Estimada: 2h 30m)
+
+Para fins de alinhamento de calendário, propomos a seguinte gestão do tempo da sessão para executarmos todas as fases:
+
+* **00m – 15m (15m):** Boas-vindas, alinhamento estratégico e diagramação da arquitetura (Control Plane SaaS vs Data Plane Local).
+* **15m – 45m (30m):** Fase 1: Git Clone, `docker compose up`, provisionamento do Data Plane local e teste de Echo-Server.
+* **45m – 85m (40m):** Fase 2 (Bloco A): Quebrando Dificuldades. Mapeamento Sensedia Legacy (Proxy OIDC) e Políticas de Segurança (ACL por Consumidor + WAF).
+* **85m – 95m (10m):** *Intervalo (Break).*
+* **95m – 130m (35m):** Fase 2 (Blocos B e C): Morte da Dívida Técnica. Substituindo Lua Scripts (Transformações, Telemetria OTLP no Jaeger visual, e M2M Identity) mais ATC Routing.
+* **130m – 150m (20m):** Q&A livre (Perguntas e Respostas), discussão de design para produção e encerramento.
 
 ---
 

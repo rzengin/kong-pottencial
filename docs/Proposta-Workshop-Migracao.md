@@ -90,3 +90,44 @@ Para fins de alinhamento de calendário e conforto técnico, propomos um roteiro
 ---
 
 Aguardamos agendas da equipe técnica para realizar o convite de apresentação oficial e seguirmos juntos com o roteiro de Setup.
+
+---
+
+## ANEXO: Guia de Instalação de Pré-requisitos (Mac e Windows)
+
+Abaixo, fornecemos os comandos diretos para acelerar o setup do seu ambiente corporativo antes do Workshop.
+
+### 1. Sistema Operacional: macOS (Apple Silicon ou Intel)
+Recomendamos a utilização do gerenciador de pacotes **Homebrew** (`brew`).
+
+* **Git & decK:**
+  Abra o Terminal e execute:
+  ```bash
+  brew install git
+  brew tap kong/deck
+  brew install deck
+  ```
+* **Docker Desktop:**
+  * Acesse [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/) e realize o download do instalador oficial (`.dmg`).
+  * Arraste-o para sua pasta de "*Applications*" e inicie o serviço (certifique-se de que o ícone do Docker esteja com as 'caixas verdes' indicando "Running").
+
+### 2. Sistema Operacional: Windows 10/11
+Para máquinas Windows, recomendamos fortemente o uso nativo do **WSL 2** com Ubuntu, ou via PowerShell.
+
+* **Docker Desktop (com WSL 2 integrado):**
+  * Baixe e instale o [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/).
+  * Durante a instalação, mantenha selecionada a opção para "Use WSL 2 instead of Hyper-V".
+  * Após reiniciar, garanta que o Docker Engine esteja "Running".
+
+* **Git & decK (Via PowerShell / Winget ou Scoop):**
+  Abra seu PowerShell como Administrador e instale o Git via winget:
+  ```powershell
+  winget install --id Git.Git -e --source winget
+  ```
+  Para instalar a CLI do Kong (decK), o método preferido oficial no Windows é baixar o binário da Release e adicioná-lo ao `PATH`:
+  1. Baixe o `.tar.gz` do Windows na página [Kong decK Releases](https://github.com/Kong/deck/releases).
+  2. Extraia o `deck.exe` para uma pasta como `C:\Program Files\Kong\`.
+  3. Adicione este diretório nas suas "Variáveis de Ambiente do Sistema" (Environment Variables -> PATH).
+  4. Valide a instalação no terminal com: `deck version`.
+
+*(Ambos os sistemas: Não é necessário configuração adicional para acesso de Saída 443 a não ser que exista uma VPN Corporativa limitadora de Edge tráfego. Caso ocorram problemas, notifique o setor de redes sobre a necessidade de contatar `*.konghq.com`)*

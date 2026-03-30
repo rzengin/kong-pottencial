@@ -1,0 +1,15 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: waf-route
+    paths:
+    - /waf
+    plugins:
+    - name: request-validator
+      config:
+        version: draft4
+        body_schema: "{\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"integer\"}}, \"required\": [\"id\"]}"
+        allowed_content_types:
+          - "application/json"

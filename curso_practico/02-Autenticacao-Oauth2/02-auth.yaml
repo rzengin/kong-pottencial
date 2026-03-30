@@ -1,0 +1,37 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: secure-api-route
+    paths:
+    - /insurance/v2
+    preserve_host: false
+    strip_path: false
+    plugins:
+    - name: openid-connect
+      config:
+        issuer: "http://host.docker.internal:8081/realms/pottencial"
+        auth_methods: ["bearer"]
+        consumer_claim: ["client_id"]
+        scopes_required: ["profile"]
+        upstream_headers_claims:
+        - "sensedia-access-flags"
+        - "sensedia-internal-identifier"
+        upstream_headers_names:
+        - "X-Sensedia-Flags"
+        - "X-Sensedia-ID"
+
+- name: keycloak-token-service
+  url: http://host.docker.internal:8081/realms/pottencial/protocol/openid-connect/token
+  routes:
+  - name: sensedia-token-proxy
+    paths:
+    - /oauth/v3/access-token
+    preserve_host: false
+    strip_path: true
+    # Aqui passamos as requisições puramente pro Keycloak sem o interceptor OIDC
+
+consumers:
+- username: App_Pottencial
+  custom_id: "app-pottencial"

@@ -1,0 +1,17 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: trace-route
+    paths:
+    - /trace
+    plugins:
+    - name: correlation-id
+      config:
+        header_name: x-trace-id
+        generator: uuid
+        echo_downstream: true
+    - name: opentelemetry
+      config:
+        endpoint: "http://host.docker.internal:4318/v1/traces"

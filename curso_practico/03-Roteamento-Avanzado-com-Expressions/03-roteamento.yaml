@@ -1,0 +1,9 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: get-quotes-with-key
+    expression: (http.method == "GET") && (http.path ~ "^/insurance/v2/(?<product_key>[^/]+)/quotes$")
+    preserve_host: false
+    strip_path: false

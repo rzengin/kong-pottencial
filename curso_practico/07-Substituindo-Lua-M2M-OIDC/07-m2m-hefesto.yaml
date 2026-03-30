@@ -1,0 +1,14 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: m2m-route
+    paths:
+    - /m2m
+    plugins:
+    - name: openid-connect
+      config:
+        client_id: ["kong-apigateway-server"]
+        client_secret: ["SUA_CHAVE_KONG"]
+        issuer: "http://host.docker.internal:8081/realms/pottencial"

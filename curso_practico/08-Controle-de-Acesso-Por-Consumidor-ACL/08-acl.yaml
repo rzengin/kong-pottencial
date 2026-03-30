@@ -1,0 +1,22 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: fechada-route
+    paths:
+    - /fechada
+    plugins:
+    - name: key-auth
+    - name: acl
+      config:
+        allow: 
+          - "parceiros_homologados"
+          - "admin_pottencial"
+
+consumers:
+- username: App_Pottencial
+  acls:
+  - group: "parceiros_homologados"
+  keyauth_credentials:
+  - key: "minha-chave-secreta"

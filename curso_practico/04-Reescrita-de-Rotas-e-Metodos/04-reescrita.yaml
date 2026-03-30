@@ -1,0 +1,16 @@
+_format_version: "3.0"
+services:
+- name: insurance-api
+  url: http://host.docker.internal:8080
+  routes:
+  - name: override-methods-key
+    expression: (http.method == "GET") && (http.path ~ "^/insurance/v2/(?<product_key>[^/]+)/quotes/(?<quote_id>[^/]+)$")
+    plugins:
+    - name: request-transformer
+      config:
+        http_method: POST
+        replace:
+          uri: /quotes/v2/quotes/$(uri_captures.quote_id)
+        add:
+          headers:
+          - x-product-key:$(uri_captures.product_key)

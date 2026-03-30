@@ -1,0 +1,1082 @@
+/**
+ * Kong Excel Importer - Importa rotas da API Gateway a partir de arquivo Excel
+ *
+ * Este script lê um arquivo Excel contendo mapeamento de rotas Gateway -> Backend
+ * e cria serviços e rotas no Kong API Gateway com suporte a expressions.
+ *
+ * Funcionalidades:
+ * - Leitura de arquivo Excel (.xlsx)
+ * - Seleção interativa de sheet e Backend Controller
+ * - Criação de serviços por Backend Controller
+ * - Rotas com expressions para captura de parâmetros
+ * - Reescrita automática de paths (gateway -> backend)
+ * - Mapeamento simples 1:1 de parâmetros (por posição, excluindo product_key)
+ * - Captura automática de {product_key} e envio no header x-product-key
+ *
+ * Exemplo de uso:
+ *   node kong-importer-excel.js Gateway-Backend-Mapping.xlsx
+ *
+ * Formato esperado do Excel:
+ *   - Gateway Endpoint: path da rota no gateway (ex: /insurance/v2/{product_key}/quotes/{quote_id})
+ *   - Backend Endpoint: path da rota no backend (ex: /quotes/v2/quotes/:quoteId)
+ *   - Method: método HTTP (GET, POST, etc)
+ *   - BackendController: nome do controlador backend (obrigatório)
+ *
+ * Mapeamento de parâmetros:
+ *   - {product_key} sempre vai para o header x-product-key
+ *   - Outros parâmetros são mapeados 1:1 por posição para o backend
+ *   Exemplo: Gateway /api/{product_key}/quotes/{quote_id}
+ *            Backend /quotes/:quoteId
+ *            Resultado: {quote_id} -> :quoteId (mapeamento direto, sem análise de nome)
+ *
+ * Requisitos:
+ *   - Kong rodando com KONG_ROUTER_FLAVOR=expressions
+ *   - npm packages: xlsx, readline-sync, axios
+ */
+
+const fs = require("fs");
+const xlsx = require("xlsx");
+const axios = require("axios");
+const readline = require("readline-sync");
+
+// Configuração do Kong
+const KONG_ADMIN_URL = "http://localhost:8001";
+
+class KongExcelImporter {
+  constructor(adminUrl = KONG_ADMIN_URL) {
+    this.adminUrl = adminUrl;
+    this.client = axios.create({
+      baseURL: adminUrl,
+      timeout: 10000,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  // Verifica se o Kong está disponível
+  async checkKongHealth() {
+    try {
+      const response = await this.client.get("/status");
+      console.log("✅ Kong está rodando e acessível");
+      return true;
+    } catch (error) {
+      console.error("❌ Kong não está acessível:", error.message);
+      console.error(
+        "💡 Certifique-se de que o Kong está rodando em:",
+        this.adminUrl,
+      );
+      return false;
+    }
+  }
+
+  // Lê o arquivo Excel e retorna os sheets disponíveis
+  readExcelFile(filePath) {
+    try {
+      const workbook = xlsx.readFile(filePath);
+      return {
+        workbook,
+        sheetNames: workbook.SheetNames,
+      };
+    } catch (error) {
+      console.error("❌ Erro ao ler arquivo Excel:", error.message);
+      throw error;
+    }
+  }
+
+  // Converte sheet para JSON
+  parseSheet(workbook, sheetName) {
+    const sheet = workbook.Sheets[sheetName];
+    return xlsx.utils.sheet_to_json(sheet);
+  }
+
+  // Converte path do Gateway para expressão Kong
+  convertGatewayPathToExpression(gatewayPath, method = "GET") {
+    // Converte {param} para captura nomeada de regex usando o nome real do parâmetro
+    // Exemplo: /insurance/v2/{product_key}/quotes -> /insurance/v2/(?<product_key>[^/]+)/quotes
+    const expressionPath = gatewayPath.replace(
+      /\{([^}]+)\}/g,
+      (match, paramName) => {
+        // Usa o nome real do parâmetro ao invés de capture1, capture2, etc
+        return `(?<${paramName}>[^/]+)`;
+      },
+    );
+
+    // Adiciona método e path na expressão
+    return `(http.method == "${method}") && (http.path ~ "^${expressionPath}$")`;
+  }
+
+  // Extrai parâmetros do path do Gateway
+  extractPathParameters(gatewayPath) {
+    const params = [];
+    const regex = /\{([^}]+)\}/g;
+    let match;
+    while ((match = regex.exec(gatewayPath)) !== null) {
+      params.push(match[1]);
+    }
+    return params;
+  }
+
+  // Converte path do Backend (substitui :param por captura)
+  parseBackendPath(backendPath) {
+    // Converte :policyId para parâmetro
+    const params = [];
+    const regex = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
+    let match;
+    while ((match = regex.exec(backendPath)) !== null) {
+      params.push(match[1]);
+    }
+    return {
+      path: backendPath,
+      parameters: params,
+    };
+  }
+
+  // Cria configuração de reescrita de path
+  // Mapeia parâmetros do gateway path para o backend path
+  createPathRewriteConfig(gatewayPath, backendPath) {
+    const gatewayParams = this.extractPathParameters(gatewayPath);
+    const backendInfo = this.parseBackendPath(backendPath);
+
+    // Cria o path de destino com as capturas
+    let rewritePath = backendPath;
+
+    // Mapeia parâmetros na ordem
+    // Se gateway tem {product_key}, {policy_id} e backend tem :policyId
+    // Precisamos mapear corretamente
+    gatewayParams.forEach((gatewayParam, index) => {
+      const captureRef = `$(uri_captures.capture${index + 1})`;
+
+      // Procura no backend path por parâmetros similares
+      backendInfo.parameters.forEach((backendParam) => {
+        // Tenta match por nome similar (case insensitive)
+        const similarityCheck = this.areParametersSimilar(
+          gatewayParam,
+          backendParam,
+        );
+        if (similarityCheck) {
+          rewritePath = rewritePath.replace(`:${backendParam}`, captureRef);
+        }
+      });
+
+      // Se não encontrou parâmetro similar, usa por ordem
+      if (backendInfo.parameters[index]) {
+        const backendParam = backendInfo.parameters[index];
+        rewritePath = rewritePath.replace(`:${backendParam}`, captureRef);
+      }
+    });
+
+    return {
+      rewritePath,
+      gatewayParams,
+      backendParams: backendInfo.parameters,
+    };
+  }
+
+  // Verifica se dois nomes de parâmetros são similares
+  areParametersSimilar(param1, param2) {
+    const normalize = (str) => str.toLowerCase().replace(/[_-]/g, "");
+    const normalized1 = normalize(param1);
+    const normalized2 = normalize(param2);
+
+    // Checa se são iguais ou se um contém o outro
+    return (
+      normalized1 === normalized2 ||
+      normalized1.includes(normalized2) ||
+      normalized2.includes(normalized1)
+    );
+  }
+
+  // Verifica se os paths do gateway e backend são compatíveis (não precisam de replaceUri)
+  // Normaliza ambos os paths substituindo parâmetros por placeholders e compara
+  arePathsCompatible(gatewayPath, backendPath) {
+    // Normaliza gateway path: substitui {param} por :param
+    const normalizedGateway = gatewayPath.replace(/\{([^}]+)\}/g, ":$1");
+
+    // Normaliza backend path: já usa :param
+    const normalizedBackend = backendPath;
+
+    // Substitui todos os parâmetros por um placeholder genérico para comparação
+    const genericGateway = normalizedGateway.replace(/:[^/]+/g, ":PARAM");
+    const genericBackend = normalizedBackend.replace(/:[^/]+/g, ":PARAM");
+
+    // Se a estrutura é a mesma, verifica se o número de parâmetros também é
+    if (genericGateway === genericBackend) {
+      const gatewayParams = this.extractPathParameters(gatewayPath);
+      const backendParams = this.parseBackendPath(backendPath).parameters;
+
+      // Paths são compatíveis se têm a mesma estrutura e mesmo número de parâmetros
+      return gatewayParams.length === backendParams.length;
+    }
+
+    return false;
+  }
+
+  // Parseia custom headers do formato "header1=value1;header2=value2"
+  parseCustomHeaders(customHeadersString) {
+    if (!customHeadersString || typeof customHeadersString !== "string") {
+      return [];
+    }
+
+    const headers = [];
+    const headerPairs = customHeadersString.split(";");
+
+    for (const pair of headerPairs) {
+      const trimmedPair = pair.trim();
+      if (!trimmedPair) continue;
+
+      // Divide no primeiro '=' para suportar valores com '='
+      const equalIndex = trimmedPair.indexOf("=");
+      if (equalIndex > 0) {
+        const key = trimmedPair.substring(0, equalIndex).trim();
+        const value = trimmedPair.substring(equalIndex + 1).trim();
+        if (key && value) {
+          headers.push(`${key}:${value}`);
+        }
+      }
+    }
+
+    return headers;
+  }
+
+  // Sanitiza nome para Kong
+  sanitizeName(name) {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9-_.]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  }
+
+  // Detecta o nome da coluna baseado em variações possíveis
+  detectColumnName(row, possibleNames) {
+    for (const name of possibleNames) {
+      if (row[name] !== undefined && row[name] !== null && row[name] !== "") {
+        return row[name];
+      }
+    }
+    return null;
+  }
+
+  // Extrai dados padronizados de uma linha do Excel
+  extractRowData(row, backendController) {
+    return {
+      gatewayPath: this.detectColumnName(row, [
+        "Gateway Endpoint",
+        "Gateway Path",
+        "Gateway Route",
+        "Endpoint",
+        "Path",
+        "Rota Gateway",
+      ]),
+      backendPath: this.detectColumnName(row, [
+        "Backend Endpoint",
+        "Backend Path",
+        "API Path",
+        "Backend Route",
+        "Rota API",
+        "Upstream Path",
+      ]),
+      method: (
+        this.detectColumnName(row, [
+          "Method",
+          "HTTP Method",
+          "Método",
+          "Verb",
+        ]) || "GET"
+      ).toUpperCase(),
+      controller:
+        this.detectColumnName(row, [
+          "BackendController",
+          "Backend Controller",
+          "Controller",
+          "Service",
+          "Serviço",
+        ]) || backendController,
+      routeName: this.detectColumnName(row, [
+        "Route Name",
+        "RouteName",
+        "Nome da Rota",
+        "Route",
+        "Name",
+      ]),
+      insertProductKeyInPayload: this.detectColumnName(row, [
+        "Insert Product-key into payload",
+        "Insert Product Key",
+        "Add Product Key",
+        "Product Key in Payload",
+      ]),
+      httpMethodOverride: this.detectColumnName(row, [
+        "Http Method",
+        "HTTP Method Override",
+        "Method Override",
+        "Override Method",
+      ]),
+      customHeaders: this.detectColumnName(row, [
+        "Custom Headers",
+        "custom headers",
+        "Headers",
+        "Additional Headers",
+      ]),
+      ignore: this.detectColumnName(row, [
+        "Ignore",
+        "ignore",
+        "Ignorar",
+        "Skip",
+      ]),
+    };
+  }
+
+  // Verifica se uma rota deve ser ignorada
+  shouldIgnoreRoute(ignoreValue) {
+    if (!ignoreValue) return false;
+    const value = String(ignoreValue).toLowerCase().trim();
+    return (
+      value === "sim" ||
+      value === "s" ||
+      value === "yes" ||
+      value === "y" ||
+      value === "true" ||
+      value === "1" ||
+      value === "x"
+    );
+  }
+
+  // Cria serviço no Kong
+  async createService(serviceConfig) {
+    try {
+      // Verifica se serviço já existe
+      try {
+        await this.client.get(`/services/${serviceConfig.name}`);
+        console.log(
+          `⚠️  Serviço '${serviceConfig.name}' já existe, atualizando...`,
+        );
+
+        const response = await this.client.patch(
+          `/services/${serviceConfig.name}`,
+          serviceConfig,
+        );
+        console.log(`✅ Serviço '${serviceConfig.name}' atualizado`);
+        return response.data;
+      } catch (notFoundError) {
+        // Serviço não existe, criar novo
+        const response = await this.client.post("/services", serviceConfig);
+        console.log(`✅ Serviço '${serviceConfig.name}' criado`);
+        return response.data;
+      }
+    } catch (error) {
+      console.error(
+        `❌ Erro ao criar/atualizar serviço '${serviceConfig.name}':`,
+        error.response?.data || error.message,
+      );
+      throw error;
+    }
+  }
+
+  // Cria rota no Kong com expressions
+  async createRoute(routeConfig, serviceId) {
+    try {
+      routeConfig.service = { id: serviceId };
+
+      // Verifica se rota já existe
+      try {
+        await this.client.get(`/routes/${routeConfig.name}`);
+        console.log(`⚠️  Rota '${routeConfig.name}' já existe, atualizando...`);
+
+        const response = await this.client.patch(
+          `/routes/${routeConfig.name}`,
+          routeConfig,
+        );
+        console.log(`   ✅ Rota '${routeConfig.name}' atualizada`);
+        return response.data;
+      } catch (notFoundError) {
+        // Rota não existe, criar nova
+        const response = await this.client.post("/routes", routeConfig);
+        console.log(`   ✅ Rota '${routeConfig.name}' criada`);
+        return response.data;
+      }
+    } catch (error) {
+      console.error(
+        `   ❌ Erro ao criar/atualizar rota '${routeConfig.name}':`,
+        error.response?.data || error.message,
+      );
+      throw error;
+    }
+  }
+
+  // Cria plugin no Kong
+  async createPlugin(pluginConfig, routeId = null, serviceId = null) {
+    try {
+      if (routeId) {
+        pluginConfig.route = { id: routeId };
+      } else if (serviceId) {
+        pluginConfig.service = { id: serviceId };
+      }
+
+      const response = await this.client.post("/plugins", pluginConfig);
+      console.log(`   ✅ Plugin '${pluginConfig.name}' aplicado`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 409) {
+        console.log(`   ⚠️  Plugin '${pluginConfig.name}' já existe`);
+      } else {
+        console.error(
+          `   ❌ Erro ao aplicar plugin '${pluginConfig.name}':`,
+          error.response?.data || error.message,
+        );
+      }
+    }
+  }
+
+  // Processa os dados do Excel e cria a configuração Kong
+  async processExcelData(excelData, backendController, serviceBaseUrl) {
+    console.log(`\n📊 Processando ${excelData.length} rotas do Excel...`);
+
+    // Agrupa por BackendController (caso tenha múltiplos)
+    const routesByController = {};
+
+    excelData.forEach((row) => {
+      const controller =
+        row.BackendController || row["Backend Controller"] || backendController;
+      if (!routesByController[controller]) {
+        routesByController[controller] = [];
+      }
+      routesByController[controller].push(row);
+    });
+
+    const results = [];
+
+    for (const [controller, routes] of Object.entries(routesByController)) {
+      console.log(`\n🔧 Processando backend controller: ${controller}`);
+
+      // Cria o serviço para este controller
+      const serviceName = this.sanitizeName(controller);
+
+      // Parse da URL do serviço
+      const serviceUrl = new URL(serviceBaseUrl);
+
+      const serviceConfig = {
+        name: serviceName,
+        protocol: serviceUrl.protocol.replace(":", ""),
+        host: serviceUrl.hostname,
+        port: serviceUrl.port || (serviceUrl.protocol === "https:" ? 443 : 80),
+        path: serviceUrl.pathname === "/" ? null : serviceUrl.pathname,
+        tags: ["imported-from-excel"],
+      };
+
+      const service = await this.createService(serviceConfig);
+
+      // Cria as rotas para este serviço
+      for (const route of routes) {
+        await this.createRouteFromExcelRow(
+          route,
+          service.id,
+          serviceName,
+          controller,
+        );
+      }
+
+      results.push({
+        controller,
+        serviceName,
+        serviceId: service.id,
+        routesCount: routes.length,
+      });
+    }
+
+    return results;
+  }
+
+  // Cria rota individual a partir de uma linha do Excel
+  async createRouteFromExcelRow(
+    row,
+    serviceId,
+    serviceName,
+    backendController,
+  ) {
+    // Extrai dados da linha usando detecção flexível de colunas
+    const rowData = this.extractRowData(row, backendController);
+    const {
+      gatewayPath,
+      backendPath,
+      method,
+      routeName: excelRouteName,
+      insertProductKeyInPayload,
+      httpMethodOverride,
+      customHeaders,
+      ignore,
+    } = rowData;
+
+    // Verifica se a rota deve ser ignorada
+    if (this.shouldIgnoreRoute(ignore)) {
+      console.log(`   ⏭️  Rota ignorada (coluna 'ignore'): ${gatewayPath}`);
+      return;
+    }
+
+    if (!gatewayPath || !backendPath) {
+      console.log(`   ⚠️  Rota inválida (faltam campos Gateway ou Backend):`);
+      console.log(`       Gateway: ${gatewayPath || "MISSING"}`);
+      console.log(`       Backend: ${backendPath || "MISSING"}`);
+      return;
+    }
+
+    // Usa o nome da rota do Excel, ou gera um se não existir
+    const routeName = excelRouteName
+      ? this.sanitizeName(excelRouteName)
+      : this.sanitizeName(
+          `${serviceName}-${method.toLowerCase()}-${gatewayPath.replace(/\//g, "-")}`,
+        );
+
+    // Verifica se tem parâmetros no path
+    const hasParameters =
+      /\{[^}]+\}/.test(gatewayPath) ||
+      /:([a-zA-Z_][a-zA-Z0-9_]*)/.test(backendPath);
+
+    let routeConfig;
+
+    if (hasParameters) {
+      // Usa expressions para rotas com parâmetros
+      const expression = this.convertGatewayPathToExpression(
+        gatewayPath,
+        method,
+      );
+
+      routeConfig = {
+        name: routeName,
+        expression: expression,
+        strip_path: false,
+        preserve_host: false,
+        tags: [
+          "imported-from-excel",
+          `service-${serviceName}`,
+          `method-${method.toLowerCase()}`,
+        ],
+      };
+    } else {
+      // Usa paths simples para rotas sem parâmetros
+      routeConfig = {
+        name: routeName,
+        methods: [method],
+        paths: [gatewayPath],
+        strip_path: false,
+        preserve_host: false,
+        tags: [
+          "imported-from-excel",
+          `service-${serviceName}`,
+          `method-${method.toLowerCase()}`,
+        ],
+      };
+    }
+
+    // Cria a rota
+    const route = await this.createRoute(routeConfig, serviceId);
+
+    // Verifica se precisa criar plugin de transformação
+    const needsTransformation =
+      hasParameters || // Tem parâmetros para mapear
+      httpMethodOverride || // Tem override de método
+      customHeaders || // Tem custom headers
+      gatewayPath !== backendPath; // Paths são diferentes (ex: kebab-case vs camelCase)
+
+    if (needsTransformation && route) {
+      await this.createPathRewritePlugin(
+        route.id,
+        routeName,
+        gatewayPath,
+        backendPath,
+        insertProductKeyInPayload,
+        httpMethodOverride,
+        customHeaders,
+      );
+
+      if (gatewayPath !== backendPath) {
+        console.log(`   📝 Path mapping: ${gatewayPath} -> ${backendPath}`);
+      }
+    }
+  }
+
+  // Cria plugin para reescrever o path, adicionar headers (x-product-key, custom headers), alterar método HTTP e opcionalmente adicionar product_key no body
+  async createPathRewritePlugin(
+    routeId,
+    routeName,
+    gatewayPath,
+    backendPath,
+    insertProductKeyInPayload = null,
+    httpMethodOverride = null,
+    customHeaders = null,
+  ) {
+    // Analisa os paths para criar a transformação
+    const gatewayParams = this.extractPathParameters(gatewayPath);
+    const backendInfo = this.parseBackendPath(backendPath);
+
+    // Identifica product_key e outros parâmetros
+    const productKeyParamName = gatewayParams.find(
+      (param) => param.toLowerCase().replace(/[_-]/g, "") === "productkey",
+    );
+    const hasProductKey = productKeyParamName !== undefined;
+
+    // Verifica se o backend path tem um parâmetro similar a productKey
+    const backendHasProductKey = backendInfo.parameters.some(
+      (param) => param.toLowerCase().replace(/[_-]/g, "") === "productkey",
+    );
+
+    // Verifica se os paths são compatíveis (não precisam de replaceUri)
+    const pathsAreCompatible = this.arePathsCompatible(
+      gatewayPath,
+      backendPath,
+    );
+
+    // Filtra parâmetros do gateway excluindo product_key APENAS se o backend não tiver productKey
+    // Isso permite que product_key seja mapeado para o backend quando necessário
+    const gatewayParamsForMapping = backendHasProductKey
+      ? gatewayParams // Se backend tem productKey, mapeia todos os parâmetros incluindo product_key
+      : gatewayParams.filter(
+          (param) => param.toLowerCase().replace(/[_-]/g, "") !== "productkey",
+        ); // Se backend não tem productKey, remove do mapeamento (vai apenas no header)
+
+    // Inicializa configuração do plugin
+    const transformerConfig = {};
+
+    // Apenas adiciona replace.uri se os paths NÃO são compatíveis
+    if (!pathsAreCompatible) {
+      // Cria mapeamento simples por ordem (1:1)
+      // Parâmetros do gateway → parâmetros do backend
+      let targetPath = backendPath;
+      let backendParamIndex = 0;
+
+      // Para cada parâmetro do gateway, mapeia para o backend
+      gatewayParamsForMapping.forEach((gatewayParam, index) => {
+        if (backendParamIndex < backendInfo.parameters.length) {
+          const backendParam = backendInfo.parameters[backendParamIndex];
+
+          // Usa o nome do parâmetro diretamente ao invés de capture1, capture2, etc
+          const captureRef = `$(uri_captures.${gatewayParam})`;
+
+          // Substitui o parâmetro do backend pela captura
+          targetPath = targetPath.replace(`:${backendParam}`, captureRef);
+
+          // Log do mapeamento
+          console.log(
+            `   🔗 Mapeamento: {${gatewayParam}} -> :${backendParam}`,
+          );
+
+          backendParamIndex++;
+        }
+      });
+
+      // Adiciona a transformação de URI
+      transformerConfig.replace = {
+        uri: targetPath,
+      };
+    } else {
+      console.log(`   ✅ Paths são compatíveis, não é necessário replaceUri`);
+    }
+
+    // Se tem override de método HTTP, adiciona na configuração
+    if (httpMethodOverride && httpMethodOverride.trim()) {
+      const methodValue = httpMethodOverride.trim().toUpperCase();
+      transformerConfig.http_method = methodValue;
+      console.log(`   🔄 HTTP Method será alterado para: ${methodValue}`);
+    }
+
+    // Inicializa a seção 'add' se necessário
+    if (!transformerConfig.add) {
+      transformerConfig.add = {};
+    }
+
+    // Array para coletar todos os headers a adicionar
+    const headersToAdd = [];
+
+    // Se tem product_key, adiciona header e opcionalmente no body
+    if (hasProductKey) {
+      const productKeyCaptureRef = `$(uri_captures.${productKeyParamName})`;
+      headersToAdd.push(`x-product-key:${productKeyCaptureRef}`);
+
+      if (backendHasProductKey) {
+        console.log(
+          `   🔑 Product Key: {${productKeyParamName}} -> mapeado para backend path E header x-product-key`,
+        );
+      } else {
+        console.log(
+          `   🔑 Product Key: {${productKeyParamName}} -> header x-product-key (não está no backend path)`,
+        );
+      }
+
+      // Verifica se deve adicionar productKey no payload
+      const shouldInsertInPayload =
+        insertProductKeyInPayload &&
+        (insertProductKeyInPayload.toLowerCase() === "sim" ||
+          insertProductKeyInPayload.toLowerCase() === "s" ||
+          insertProductKeyInPayload.toLowerCase() === "yes" ||
+          insertProductKeyInPayload.toLowerCase() === "y");
+
+      if (shouldInsertInPayload) {
+        // Adiciona productKey no body da request
+        transformerConfig.add.body = [`productKey:${productKeyCaptureRef}`];
+        console.log(
+          `   📦 Product Key também será adicionado no body como 'productKey'`,
+        );
+      }
+    }
+
+    // Se tem custom headers, parseia e adiciona
+    if (customHeaders && customHeaders.trim()) {
+      const parsedHeaders = this.parseCustomHeaders(customHeaders);
+      if (parsedHeaders.length > 0) {
+        headersToAdd.push(...parsedHeaders);
+        console.log(
+          `   📋 Custom Headers adicionados: ${parsedHeaders.map((h) => h.split(":")[0]).join(", ")}`,
+        );
+      }
+    }
+
+    // Adiciona todos os headers coletados
+    if (headersToAdd.length > 0) {
+      transformerConfig.add.headers = headersToAdd;
+    }
+
+    // Apenas cria o plugin se houver alguma transformação a fazer
+    const hasTransformations =
+      transformerConfig.replace?.uri ||
+      transformerConfig.http_method ||
+      transformerConfig.add?.headers ||
+      transformerConfig.add?.body;
+
+    if (!hasTransformations) {
+      console.log(
+        `   ℹ️  Nenhuma transformação necessária, plugin não será criado`,
+      );
+      return;
+    }
+
+    // Plugin request-transformer para reescrever o path e adicionar headers
+    try {
+      const transformerPlugin = {
+        name: "request-transformer",
+        instance_name: `${routeName}-request-transformer`,
+        config: transformerConfig,
+      };
+
+      await this.createPlugin(transformerPlugin, routeId);
+
+      // Log apropriado baseado no que foi transformado
+      const transformations = [];
+      if (transformerConfig.replace?.uri) transformations.push("URI");
+      if (transformerConfig.http_method) transformations.push("Method");
+      if (transformerConfig.add?.headers) transformations.push("Headers");
+      if (transformerConfig.add?.body) transformations.push("Body");
+
+      console.log(
+        `   🔧 Plugin de transformação aplicado: ${transformations.join(", ")}`,
+      );
+    } catch (error) {
+      console.log(
+        `   ⚠️  Não foi possível aplicar plugin de transformação: ${error.message}`,
+      );
+    }
+  }
+
+  // Processa um sheet específico
+  async processSheet(
+    workbook,
+    sheetName,
+    serviceBaseUrl,
+    autoImportAll = false,
+  ) {
+    const separator = "=".repeat(80);
+    console.log(`\n\n${separator}`);
+    console.log(`📊 Processando Sheet: ${sheetName}`);
+    console.log(`${separator}\n`);
+
+    // Parseia os dados do sheet
+    const excelData = this.parseSheet(workbook, sheetName);
+
+    if (excelData.length === 0) {
+      console.log(`   ⚠️  Sheet '${sheetName}' não contém dados, pulando...`);
+      return [];
+    }
+
+    console.log(`📦 Encontrados ${excelData.length} registros no sheet`);
+
+    // Extrai todos os Backend Controllers únicos do sheet
+    const controllersSet = new Set();
+    excelData.forEach((row) => {
+      const controller = this.detectColumnName(row, [
+        "BackendController",
+        "Backend Controller",
+        "Controller",
+        "Service",
+        "Serviço",
+      ]);
+      if (controller && controller.trim()) {
+        controllersSet.add(controller.trim());
+      }
+    });
+
+    const availableControllers = Array.from(controllersSet).sort();
+
+    if (availableControllers.length === 0) {
+      console.log(
+        `   ⚠️  Nenhum Backend Controller encontrado no sheet '${sheetName}', pulando...`,
+      );
+      return [];
+    }
+
+    let importAllControllers;
+    let selectedController;
+
+    // Se autoImportAll estiver ativo, importa tudo automaticamente
+    if (autoImportAll) {
+      importAllControllers = true;
+      selectedController = null;
+      console.log(
+        `\n🎯 Modo automático: Importando TODOS os controllers deste sheet (${availableControllers.length} controllers)`,
+      );
+    } else {
+      // Mostra Backend Controllers disponíveis
+      console.log(`\n🎯 Backend Controllers disponíveis neste sheet:`);
+      console.log(`  0. ALL (Importar todos os controllers deste sheet)`);
+      availableControllers.forEach((controller, index) => {
+        console.log(`  ${index + 1}. ${controller}`);
+      });
+
+      // Pergunta qual backend controller
+      const controllerIndex =
+        readline.questionInt(
+          `\n❓ Qual Backend Controller deseja importar? (0-${availableControllers.length}): `,
+        ) - 1;
+
+      if (
+        controllerIndex < -1 ||
+        controllerIndex >= availableControllers.length
+      ) {
+        throw new Error("Backend Controller inválido selecionado");
+      }
+
+      importAllControllers = controllerIndex === -1;
+      selectedController = importAllControllers
+        ? null
+        : availableControllers[controllerIndex];
+    }
+
+    if (!autoImportAll) {
+      if (importAllControllers) {
+        console.log(
+          `✅ Selecionado: Importar TODOS os controllers deste sheet`,
+        );
+      } else {
+        console.log(`✅ Backend Controller selecionado: ${selectedController}`);
+      }
+    }
+
+    // Filtra as rotas baseado na seleção
+    const filteredData = importAllControllers
+      ? excelData.filter((row) => {
+          const controller = this.detectColumnName(row, [
+            "BackendController",
+            "Backend Controller",
+            "Controller",
+            "Service",
+            "Serviço",
+          ]);
+          return controller && controller.trim();
+        })
+      : excelData.filter((row) => {
+          const controller = this.detectColumnName(row, [
+            "BackendController",
+            "Backend Controller",
+            "Controller",
+            "Service",
+            "Serviço",
+          ]);
+          return controller && controller.trim() === selectedController;
+        });
+
+    if (importAllControllers) {
+      console.log(
+        `\n📋 Encontradas ${filteredData.length} rotas para todos os controllers (${availableControllers.length} controllers)`,
+      );
+    } else {
+      console.log(
+        `\n📋 Encontradas ${filteredData.length} rotas para ${selectedController}`,
+      );
+    }
+
+    // Mostra as colunas disponíveis apenas se não for modo automático
+    if (!autoImportAll && filteredData.length > 0) {
+      console.log(`\n📋 Colunas disponíveis no Excel:`);
+      Object.keys(filteredData[0]).forEach((col, index) => {
+        console.log(`  ${index + 1}. ${col}`);
+      });
+    }
+
+    // Mostra preview e pede confirmação apenas se não for modo automático
+    if (!autoImportAll) {
+      console.log(`\n📄 Primeiros 3 registros (exemplo):`);
+      filteredData.slice(0, 3).forEach((row, index) => {
+        const rowData = this.extractRowData(row, selectedController || "");
+        console.log(`\n  Registro ${index + 1}:`);
+        console.log(`    Gateway: ${rowData.gatewayPath || "N/A"}`);
+        console.log(`    Backend: ${rowData.backendPath || "N/A"}`);
+        console.log(`    Method: ${rowData.method || "N/A"}`);
+        console.log(`    Controller: ${rowData.controller}`);
+        if (rowData.ignore) {
+          console.log(`    ⚠️  IGNORAR: ${rowData.ignore}`);
+        }
+      });
+
+      const confirm = readline.question(
+        "\n❓ Deseja continuar com a importação deste sheet? (s/n): ",
+      );
+
+      if (
+        confirm.toLowerCase() !== "s" &&
+        confirm.toLowerCase() !== "sim" &&
+        confirm.trim() !== ""
+      ) {
+        console.log("❌ Importação deste sheet cancelada pelo usuário");
+        return [];
+      }
+    }
+
+    // Processa os dados (controller selecionado ou todos)
+    const results = await this.processExcelData(
+      filteredData,
+      selectedController || "",
+      serviceBaseUrl,
+    );
+
+    return results;
+  }
+
+  // Fluxo interativo principal
+  async importFromExcel(excelFilePath) {
+    console.log(`\n🚀 Importador Kong baseado em Excel\n`);
+
+    if (!(await this.checkKongHealth())) {
+      throw new Error("Kong não está acessível");
+    }
+
+    // Lê o arquivo Excel
+    console.log(`\n📖 Lendo arquivo: ${excelFilePath}`);
+    const { workbook, sheetNames } = this.readExcelFile(excelFilePath);
+
+    // Mostra sheets disponíveis
+    console.log(`\n📊 Sheets disponíveis:`);
+    console.log(`  0. ALL (Importar todos os sheets)`);
+    sheetNames.forEach((name, index) => {
+      console.log(`  ${index + 1}. ${name}`);
+    });
+
+    // Pergunta qual sheet importar
+    const sheetIndex =
+      readline.questionInt(
+        `\n❓ Qual sheet deseja importar? (0-${sheetNames.length}): `,
+      ) - 1;
+
+    if (sheetIndex < -1 || sheetIndex >= sheetNames.length) {
+      throw new Error("Sheet inválido selecionado");
+    }
+
+    const importAllSheets = sheetIndex === -1;
+    const selectedSheets = importAllSheets
+      ? sheetNames
+      : [sheetNames[sheetIndex]];
+
+    if (importAllSheets) {
+      console.log(
+        `✅ Selecionado: Importar TODOS os sheets (${sheetNames.length} sheets)`,
+      );
+    } else {
+      console.log(`✅ Sheet selecionado: ${selectedSheets[0]}`);
+    }
+
+    // Pergunta a URL base do serviço (uma vez para todos)
+    let serviceBaseUrl = readline.question(
+      "\n❓ Qual a URL base do serviço backend (ex: https://sensedia-hml-shared.pottencial.com.br): ",
+    );
+
+    if (serviceBaseUrl.trim() === "")
+      serviceBaseUrl = "https://sensedia-hml-shared.pottencial.com.br";
+
+    // Valida URL
+    try {
+      new URL(serviceBaseUrl);
+    } catch (error) {
+      throw new Error("URL base inválida");
+    }
+
+    if (importAllSheets) {
+      console.log("\n💡 Modo ALL Sheets: Processamento automático ativado.");
+      console.log("   • A mesma URL base será usada para todos os sheets");
+      console.log("   • Todos os controllers de cada sheet serão importados");
+      console.log("\n🚀 Iniciando importação em lote...\n");
+    }
+
+    // Processa cada sheet selecionado
+    const allResults = [];
+    for (const sheetName of selectedSheets) {
+      try {
+        const results = await this.processSheet(
+          workbook,
+          sheetName,
+          serviceBaseUrl,
+          importAllSheets, // autoImportAll
+        );
+        allResults.push(...results);
+      } catch (error) {
+        console.error(
+          `\n❌ Erro ao processar sheet '${sheetName}': ${error.message}`,
+        );
+        if (!importAllSheets) {
+          throw error; // Re-throw se for apenas um sheet
+        }
+        // Continua com próximo sheet se for modo ALL
+      }
+    }
+
+    // Resumo final
+    const separator = "=".repeat(80);
+    console.log(`\n\n${separator}`);
+    console.log(`🎉 Importação Concluída!`);
+    console.log(`${separator}\n`);
+    console.log(`📊 Resumo Geral:`);
+    console.log(`   Sheets processados: ${selectedSheets.length}`);
+    console.log(`   Serviços criados/atualizados: ${allResults.length}`);
+
+    const totalRoutes = allResults.reduce((sum, r) => sum + r.routesCount, 0);
+    console.log(`   Total de rotas criadas: ${totalRoutes}`);
+
+    console.log(`\n📋 Detalhamento por serviço:`);
+    allResults.forEach((result) => {
+      console.log(
+        `   ✅ ${result.controller}: ${result.routesCount} rotas criadas`,
+      );
+    });
+
+    console.log(`\n🌐 Kong Admin: http://localhost:8002`);
+    console.log(`🔧 Kong Admin API: http://localhost:8001`);
+    console.log(`🚀 Kong Gateway: http://localhost:8000`);
+  }
+}
+
+// Execução principal
+if (require.main === module) {
+  const excelFilePath =
+    process.argv[2] || "Gateway-Backend-Mapping-2026-02-20T15-01-51.xlsx";
+
+  const importer = new KongExcelImporter();
+
+  importer
+    .importFromExcel(excelFilePath)
+    .then(() => {
+      console.log("\n✅ Processo concluído com sucesso!");
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error("\n❌ Erro durante importação:", error.message);
+      process.exit(1);
+    });
+}
+
+module.exports = KongExcelImporter;

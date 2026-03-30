@@ -28,15 +28,26 @@ Configurando o plugin OIDC (como em `/insurance`), o Kong fará o download da ch
 ### B. Importação em Massa - Seed (Para Tokens Opacos OAuth2 da Sensedia)
 Caso os aplicativos transacionais enviem tokens "opacos" gerados originalmente através do legado da Sensedia, é possível exportar a lista de hashes do banco obsoleto e semear (*Mass Seed*) a nova base OAuth2 do Kong Enterprise via APIs administrativas. O app original do parceiro enviará o mesmíssimo *Bearer Token* sem sofrer interrupções.
 
-**Exemplo de Seed usando a Admin API sem interromper os aplicativos:**
+### 📂 Laboratórios Práticos Adicionais (Estratégia Zero-Atrito)
+
+Para materializar essas duas vertentes essenciais de migração, desenvolvemos dois scripts *hands-on* que emulam e provam a performance da estratégia "Zero Friction":
+
+**Exercício Prático A: Validação Stateless de JWT**
+Script instrucional focado em forçar chamadas usando um Token recém-emitido artificialmente fora do gateway, provando por medição de *benchmark* (`ms`) que o Data Plane valida a criptografia da assinatura instantaneamente, de forma Stateless, descartando saltos e travas de banco de dados e APIs terceiras.
+*Execute:*
 ```bash
-# Exportar a linha legada e postá-la mantendo o tempo de expiração pendente
-curl -X POST http://<KONG_ADMIN_URL>:8001/consumers/app-pottencial/oauth2 \
-  -H "Kong-Admin-Token: $KONNECT_TOKEN" \
-  --data "access_token=MEU_TOKEN_ANTIGO_SENSEDIA_XYZ" \
-  --data "expires_in=2592000"
+chmod +x lab-a-stateless.sh
+./lab-a-stateless.sh
 ```
-*O parceiro continuará enviando `Authorization: Bearer MEU_TOKEN_ANTIGO_SENSEDIA_XYZ` para a API transacional através do novo ambiente com rotação passiva.*
+
+**Exercício Prático B: Script de Seed de Tokens Opacos Oauth2**
+Script emulador de _Jobs_ (Pipelines DevSecOps) varrendo um antigo banco Sensedia hipotético, forçando a importação declarativa via Admin API de tokens antigos (*Mass Seed*) acoplados ao consumidor `app-pottencial`. O token será aceito amanhã mantendo o prazo de expiração (TTL) igual a hoje.
+*Execute:*
+```bash
+chmod +x lab-b-mass-seed.sh
+./lab-b-mass-seed.sh
+```
+*O Aplicativo Parceiro manterá sua request intacta, não importando a origem dos hashes!*
 
 ---
 ## 1. Configurando o Identity Provider (Keycloak) Localmente

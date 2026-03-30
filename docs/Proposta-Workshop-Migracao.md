@@ -66,16 +66,26 @@ Notamos que, visando preencher lacunas, a equipe de vocês desenvolveu 3 plugins
 
 ---
 
-## Agenda Sugerida (Duração Estimada: 2h 30m)
+## Agenda Sugerida (Duração Estimada: 4 Horas)
 
-Para fins de alinhamento de calendário, propomos a seguinte gestão do tempo da sessão para executarmos todas as fases:
+Para fins de alinhamento de calendário e conforto técnico, propomos um roteiro expandido com intervalos regulares:
 
+**Hora 1**
 * **00m – 15m (15m):** Boas-vindas, alinhamento estratégico e diagramação da arquitetura (Control Plane SaaS vs Data Plane Local).
-* **15m – 45m (30m):** Fase 1: Git Clone, `docker compose up`, provisionamento do Data Plane local e teste de Echo-Server.
-* **45m – 85m (40m):** Fase 2 (Bloco A): Quebrando Dificuldades. Mapeamento Sensedia Legacy (Proxy OIDC) e Políticas de Segurança (ACL por Consumidor + WAF).
-* **85m – 95m (10m):** *Intervalo (Break).*
-* **95m – 130m (35m):** Fase 2 (Blocos B e C): Morte da Dívida Técnica. Substituindo Lua Scripts (Transformações, Telemetria OTLP no Jaeger visual, e M2M Identity) mais ATC Routing.
-* **130m – 150m (20m):** Q&A livre (Perguntas e Respostas), discussão de design para produção e encerramento.
+* **15m – 55m (40m):** Fase 1: Instalação do Ambiente Local (Validação de pré-requisitos, Git Clone, `docker compose up`, provisionamento do Data Plane corporativo e teste do mock local).
+* **55m – 60m (05m):** *Pausa Rápida (Break/Água).*
+
+**Hora 2**
+* **60m – 110m (50m):** Fase 2 (Bloco A): Tratamento de Tokens Legados. Criação do Proxy Reverso Transparente OIDC integrando Sensedia legado com o Identity Provider.
+* **110m – 125m (15m):** *Intervalo Principal (Coffee Break).*
+
+**Hora 3**
+* **125m – 175m (50m):** Fase 2 (Bloco A e B): Governança sem Código. Deploy de Políticas de Segurança (ACL Dinâmico + Edge WAF de Validação) e Remoção da 1ª Dívida Técnica (Substituindo transformações Lua nativamente).
+* **175m – 180m (05m):** *Pausa Rápida (Break/Água).*
+
+**Hora 4**
+* **180m – 220m (40m):** Fase 2 (Blocos B e C): Observabilidade e Roteamento Nativo. Integração OTLP para Traces visuais no Jaeger sem instrumentação Lua, Identidade M2M Outbound e Roteamento Expressivo ATC.
+* **220m – 240m (20m):** Q&A corporativo, modelagem do deploy de Produção e considerações finais.
 
 ---
 

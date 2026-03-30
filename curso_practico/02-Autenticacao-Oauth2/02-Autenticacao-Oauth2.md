@@ -17,6 +17,28 @@ Na Sensedia, o próprio API Gateway atuava equivocadamente como um Banco de Dado
 
 ---
 
+## Estratégia Zero-Atrito: Mantendo os Tokens Atuais dos Clientes
+
+Para alinhar com os objetivos de negócio e evitar forçar os aplicativos parceiros a gerar novos tokens ou realizar novas integrações de Autenticação com o Gateway na hora da virada, o Kong Enterprise permite contornar a migração com duas opções de **Zero Atrito** (Zero-Friction):
+
+### A. Validação Stateless (Para tokens em formato JWT)
+Se o token atual emitido aos clientes já possuir o formato JWT assinado validamente pelo Servidor de Identidades corporativo atual (Ex: Keycloak/Hefesto), não é necessário migrar nenhum dado dos clientes.
+Configurando o plugin OIDC (como em `/insurance`), o Kong fará o download da chave pública do IDP e executará a validação local e em tempo real da criptografia antiga do cliente preexistente, autorizando a requisição instantaneamente (`~1ms`). É a estratégia definitiva de independência de infraestrutura.
+
+### B. Importação em Massa - Seed (Para Tokens Opacos OAuth2 da Sensedia)
+Caso os aplicativos transacionais enviem tokens "opacos" gerados originalmente através do legado da Sensedia, é possível exportar a lista de hashes do banco obsoleto e semear (*Mass Seed*) a nova base OAuth2 do Kong Enterprise via APIs administrativas. O app original do parceiro enviará o mesmíssimo *Bearer Token* sem sofrer interrupções.
+
+**Exemplo de Seed usando a Admin API sem interromper os aplicativos:**
+```bash
+# Exportar a linha legada e postá-la mantendo o tempo de expiração pendente
+curl -X POST http://<KONG_ADMIN_URL>:8001/consumers/app-pottencial/oauth2 \
+  -H "Kong-Admin-Token: $KONNECT_TOKEN" \
+  --data "access_token=MEU_TOKEN_ANTIGO_SENSEDIA_XYZ" \
+  --data "expires_in=2592000"
+```
+*O parceiro continuará enviando `Authorization: Bearer MEU_TOKEN_ANTIGO_SENSEDIA_XYZ` para a API transacional através do novo ambiente com rotação passiva.*
+
+---
 ## 1. Configurando o Identity Provider (Keycloak) Localmente
 
 Criamos um script que injeta as **Propriedades Adicionais (Claims)** exatamente como eram guardadas na Sensedia, mas agora embutidas direto na Configuração de Cliente do Keycloak:

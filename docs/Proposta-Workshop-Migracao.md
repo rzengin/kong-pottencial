@@ -130,4 +130,25 @@ Para máquinas Windows, recomendamos fortemente o uso nativo do **WSL 2** com Ub
   3. Adicione este diretório nas suas "Variáveis de Ambiente do Sistema" (Environment Variables -> PATH).
   4. Valide a instalação no terminal com: `deck version`.
 
-*(Ambos os sistemas: Não é necessário configuração adicional para acesso de Saída 443 a não ser que exista uma VPN Corporativa limitadora de Edge tráfego. Caso ocorram problemas, notifique o setor de redes sobre a necessidade de contatar `*.konghq.com`)*
+### 3. Sistema Operacional: Linux (Ubuntu/Debian)
+Para workstations ou máquinas virtuais utilizando distribuições baseadas em Debian Linux.
+
+* **Docker Engine & Git:**
+  No terminal executado como usuário Root ou Sudo, instale nativamente os serviços:
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y git docker.io docker-compose-v2
+  sudo systemctl start docker
+  sudo systemctl enable docker
+  sudo usermod -aG docker $USER
+  ```
+  *(Feche e abra novamente a sessão do terminal para aplicar os privilégios do grupo do Docker)*
+
+* **Kong CLI (decK):**
+  A KongHQ disponibiliza o pacote nativo completo para Linux com instalação em duas linhas:
+  ```bash
+  curl -1sLf "https://packages.konghq.com/public/deck/setup.deb.sh" | sudo -E bash
+  sudo apt-get install -y deck
+  ```
+
+*(Todos os sistemas: Não é necessário configuração adicional para acesso de Saída 443 a não ser que exista uma VPN Corporativa limitadora de Edge tráfego. Caso ocorram problemas, notifique o setor de redes sobre a necessidade de contatar `*.konghq.com`)*

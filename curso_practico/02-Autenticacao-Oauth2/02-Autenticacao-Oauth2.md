@@ -28,26 +28,7 @@ Configurando o plugin OIDC (como em `/insurance`), o Kong fará o download da ch
 ### B. Importação em Massa - Seed (Para Tokens Opacos OAuth2 da Sensedia)
 Caso os aplicativos transacionais enviem tokens "opacos" gerados originalmente através do legado da Sensedia, é possível exportar a lista de hashes do banco obsoleto e semear (*Mass Seed*) a nova base OAuth2 do Kong Enterprise via APIs administrativas. O app original do parceiro enviará o mesmíssimo *Bearer Token* sem sofrer interrupções.
 
-### 📂 Laboratórios Práticos Adicionais (Estratégia Zero-Atrito)
-
-Para materializar essas duas vertentes essenciais de migração, desenvolvemos dois scripts *hands-on* que emulam e provam a performance da estratégia "Zero Friction":
-
-**Exercício Prático A: Validação Stateless de JWT**
-Script instrucional focado em forçar chamadas usando um Token recém-emitido artificialmente fora do gateway, provando por medição de *benchmark* (`ms`) que o Data Plane valida a criptografia da assinatura instantaneamente, de forma Stateless, descartando saltos e travas de banco de dados e APIs terceiras.
-*Execute:*
-```bash
-chmod +x lab-a-stateless.sh
-./lab-a-stateless.sh
-```
-
-**Exercício Prático B: Script de Seed de Tokens Opacos Oauth2**
-Script emulador de _Jobs_ (Pipelines DevSecOps) varrendo um antigo banco Sensedia hipotético, forçando a importação declarativa via Admin API de tokens antigos (*Mass Seed*) acoplados ao consumidor `app-pottencial`. O token será aceito amanhã mantendo o prazo de expiração (TTL) igual a hoje.
-*Execute:*
-```bash
-chmod +x lab-b-mass-seed.sh
-./lab-b-mass-seed.sh
-```
-*O Aplicativo Parceiro manterá sua request intacta, não importando a origem dos hashes!*
+*(Siga até a **Seção 5** no final deste documento para executar os laboratórios práticos e visualizar ambas as estratégias funcionando contra o Gateway na sua máquina!)*
 
 ---
 ## 1. Configurando o Identity Provider (Keycloak) Localmente
@@ -172,3 +153,26 @@ python3 cliente_sensedia_mock.py
 *(Se preferir, o script já possui permissão de execução em sistemas Unix, bastando rodar `./cliente_sensedia_mock.py`)*
 
 O script executará automaticamente as duas fases (A e B) e imprimirá de forma colorida e clara os payloads e os Headers injetados. É a prova definitiva de que o Kong Konnect gerencia o fluxo legado com maestria!
+
+---
+
+## 5. Laboratórios Práticos Adicionais: Executando o Zero-Atrito
+
+Agora que nossa topologia está rodando e validada, vamos praticar visualmente as estratégias de migração de tokens discutidas na introdução.
+
+### Exercício Prático A: Validação Stateless de JWT
+Este script força chamadas locais provando, por medição de fita de tempo (`ms`), que o Kong valida o token de forma local (Stateless) usando cache da chave pública, não esbarrando em limitações de DB.
+**Execute na raiz deste módulo:**
+```bash
+chmod +x lab-a-stateless.sh
+./lab-a-stateless.sh
+```
+
+### Exercício Prático B: Mass Seed de Tokens Opacos
+Este script simulará um job de integração extraindo uma chave hash (`SENSEDIA_XYZ`) do legado e injetando-a massivamente na Admin API do Kong atrelada ao nosso consumidor, provando a intercambialidade limpa.
+**Execute na raiz deste módulo:**
+```bash
+chmod +x lab-b-mass-seed.sh
+./lab-b-mass-seed.sh
+```
+*(O parceiro transacional continuará trafegando seu `Authorization` intacto hoje e amanhã!)*
